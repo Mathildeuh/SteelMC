@@ -18,6 +18,7 @@ mod kick;
 mod kill;
 mod list;
 mod locate;
+mod msg;
 mod operator;
 mod pardon;
 mod perms;
@@ -86,6 +87,7 @@ pub(crate) fn create_registered_dispatcher(
     builder.register(kill::registration())?;
     builder.register(list::registration())?;
     builder.register(locate::registration())?;
+    builder.register(msg::registration())?;
     builder.register(operator::op_registration())?;
     builder.register(pardon::registration())?;
     builder.register(perms::registration())?;
@@ -169,6 +171,9 @@ mod tests {
                 "kill",
                 "list",
                 "locate",
+                "msg",
+                "tell",
+                "w",
                 "op",
                 "pardon",
                 "perms",
