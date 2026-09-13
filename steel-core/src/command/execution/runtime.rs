@@ -352,9 +352,12 @@ where
             .map(|value| &value.0)
     }
 
-    pub(crate) fn message(&self, name: &str) -> Result<&str, CommandSyntaxError> {
+    /// Returns a message argument's raw, unresolved text (`@selector`s
+    /// included verbatim). Use [`SteelCommandContext::message`] to also
+    /// resolve those selectors into their matched entities' display names.
+    pub(crate) fn message_text(&self, name: &str) -> Result<&str, CommandSyntaxError> {
         self.typed_argument::<MessageValue>(name)
-            .map(|value| &*value.0)
+            .map(MessageValue::text)
     }
 
     pub(crate) fn nbt_path(&self, name: &str) -> Result<&NbtPath, CommandSyntaxError> {
@@ -414,6 +417,13 @@ where
 }
 
 impl SteelCommandContext<CommandSource> {
+    /// Resolves a message argument, splicing in any `@selector` occurrences
+    /// it contains as their matched entities' display names.
+    pub(crate) fn message(&self, name: &str) -> Result<TextComponent, CommandSyntaxError> {
+        self.typed_argument::<MessageValue>(name)?
+            .resolve(self.source())
+    }
+
     pub(crate) fn score_holders(
         &self,
         name: &str,
