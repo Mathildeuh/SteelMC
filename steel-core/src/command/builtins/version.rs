@@ -1,7 +1,7 @@
 //! Vanilla server-version reporting command.
 
 use steel_registry::packets::CURRENT_MC_PROTOCOL;
-use steel_utils::{Identifier, MC_VERSION, translations};
+use steel_utils::{Identifier, translations, version};
 use text_components::TextComponent;
 
 use super::super::{
@@ -18,11 +18,10 @@ fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {
     literal("version").executes(send_version)
 }
 
-/// Reports the id, name, protocol, and stability of the targeted vanilla
-/// version. Vanilla's `/version` also reports a save-data version, a
-/// save-data version series, a build time, and resource/data pack versions -
-/// Steel doesn't track any of those yet, so those lines are left out rather
-/// than filled in with made-up numbers.
+/// Reports the targeted vanilla version the way `VersionCommand#dumpVersion`
+/// does, using the `version.json` the build script extracts from the target
+/// server jar for everything but the protocol number (already tracked by
+/// `steel_registry::packets::CURRENT_MC_PROTOCOL`).
 #[expect(
     clippy::unnecessary_wraps,
     reason = "Command executors use a shared fallible callback signature."
@@ -32,12 +31,22 @@ fn send_version(context: &SteelCommandContext<CommandSource>) -> Result<i32, Com
     source.send_system_message(&TextComponent::from(&translations::COMMANDS_VERSION_HEADER));
     source.send_system_message(
         &translations::COMMANDS_VERSION_ID
-            .message([MC_VERSION])
+            .message([version::VERSION_ID])
             .component(),
     );
     source.send_system_message(
         &translations::COMMANDS_VERSION_NAME
-            .message([MC_VERSION])
+            .message([version::VERSION_NAME])
+            .component(),
+    );
+    source.send_system_message(
+        &translations::COMMANDS_VERSION_DATA
+            .message([version::DATA_VERSION.to_string()])
+            .component(),
+    );
+    source.send_system_message(
+        &translations::COMMANDS_VERSION_SERIES
+            .message([version::DATA_VERSION_SERIES])
             .component(),
     );
     source.send_system_message(
@@ -48,12 +57,25 @@ fn send_version(context: &SteelCommandContext<CommandSource>) -> Result<i32, Com
             ])
             .component(),
     );
-    // Steel only ever targets full releases of MC_VERSION, never a
-    // pre-release build of it (e.g. "26.3-rc-1").
-    let stable = if MC_VERSION.contains('-') {
-        &translations::COMMANDS_VERSION_STABLE_NO
-    } else {
+    source.send_system_message(
+        &translations::COMMANDS_VERSION_BUILD_TIME
+            .message([version::BUILD_TIME])
+            .component(),
+    );
+    source.send_system_message(
+        &translations::COMMANDS_VERSION_PACK_RESOURCE
+            .message([version::RESOURCE_PACK_VERSION])
+            .component(),
+    );
+    source.send_system_message(
+        &translations::COMMANDS_VERSION_PACK_DATA
+            .message([version::DATA_PACK_VERSION])
+            .component(),
+    );
+    let stable = if version::STABLE {
         &translations::COMMANDS_VERSION_STABLE_YES
+    } else {
+        &translations::COMMANDS_VERSION_STABLE_NO
     };
     source.send_system_message(&TextComponent::from(stable));
     Ok(1)
