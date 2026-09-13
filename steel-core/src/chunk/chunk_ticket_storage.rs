@@ -187,9 +187,13 @@ impl ChunkTicketStorage {
     /// single bad entry never fails the whole load.
     pub(crate) fn from_persistent(persistent: PersistentChunkTickets) -> Self {
         let mut storage = Self::new();
-        for (index, persistent_ticket) in persistent.tickets.into_iter().enumerate() {
+        for persistent_ticket in persistent.tickets {
+            let chunk_x = persistent_ticket.chunk_x;
+            let chunk_z = persistent_ticket.chunk_z;
             if let Err(error) = storage.add_loaded_persistent_ticket(persistent_ticket) {
-                log::warn!("Ignoring invalid persistent chunk ticket at index {index}: {error}");
+                log::warn!(
+                    "Ignoring invalid persistent chunk ticket at ({chunk_x}, {chunk_z}): {error}"
+                );
             }
         }
         storage
