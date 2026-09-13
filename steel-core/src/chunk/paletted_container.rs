@@ -607,10 +607,8 @@ mod tests {
         assert_column_matches_get(&container, x, z);
     }
 
-    /// A container with more distinct values than any linear/hash palette holds
-    /// must use the registry-derived global bit width, and the fixed-size long
-    /// array it writes (no length prefix) must match that width exactly, or every
-    /// section after it is parsed from the wrong offset.
+    /// The written long array has no length prefix, so a wrong bit width
+    /// desyncs every section parsed after this one.
     #[test]
     fn block_global_palette_uses_registry_derived_bit_width_and_long_count() {
         init_vanilla_registry();
@@ -624,7 +622,6 @@ mod tests {
                 }
             }
         }
-        // All 4096 cells are distinct, well past the 256-entry hashed-palette cap.
         let container = BlockPalette::from_cube(cube);
 
         let mut written = Vec::new();
@@ -652,7 +649,6 @@ mod tests {
                 }
             }
         }
-        // All 64 cells are distinct, well past the 8-entry hashed-palette cap.
         let container = BiomePalette::from_cube(cube);
 
         let mut written = Vec::new();

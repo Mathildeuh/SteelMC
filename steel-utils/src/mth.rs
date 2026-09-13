@@ -21,7 +21,6 @@ mod tests {
         assert_eq!(ceil_log2(65), 7);
         // 26.2's block-state count needs 15 bits, matching the old hardcoded value.
         assert_eq!(ceil_log2(32_366), 15);
-        // 26.3-rc-1's block-state count needs a 16th bit.
         assert_eq!(ceil_log2(35_723), 16);
     }
 }
