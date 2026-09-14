@@ -38,7 +38,7 @@ fn kick_with_reason(
     context: &SteelCommandContext<CommandSource>,
 ) -> Result<i32, CommandSyntaxError> {
     let reason = context.message("reason")?;
-    kick_players(context, TextComponent::plain(reason.to_owned()))
+    kick_players(context, reason)
 }
 
 fn kick_players(

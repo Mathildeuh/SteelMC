@@ -13,8 +13,8 @@ use steel_protocol::packets::common::{
 use steel_protocol::packets::game::{
     CBundleDelimiter, CCommandSuggestions, ClientCommandAction, PlayerAction, PlayerCommandAction,
     SAcceptTeleportation, SAttack, SChangeDifficulty, SChangeGameMode, SChat, SChatAck,
-    SChatCommand, SChatSessionUpdate, SChunkBatchReceived, SClientCommand, SClientTickEnd,
-    SCommandSuggestion, SContainerButtonClick, SContainerClick, SContainerClose,
+    SChatCommand, SChatCommandSigned, SChatSessionUpdate, SChunkBatchReceived, SClientCommand,
+    SClientTickEnd, SCommandSuggestion, SContainerButtonClick, SContainerClick, SContainerClose,
     SContainerSlotStateChanged, SInteract, SMovePlayer, SMovePlayerPos, SMovePlayerPosRot,
     SMovePlayerRot, SMovePlayerStatusOnly, SMoveVehicle, SPickItemFromBlock, SPlayerAbilities,
     SPlayerAction, SPlayerCommand, SPlayerInput, SPlayerLoad, SRenameItem, SSetCarriedItem,
@@ -29,8 +29,7 @@ use text_components::content::Resolvable;
 use text_components::custom::CustomData;
 use text_components::resolving::TextResolutor;
 use text_components::{Modifier, TextComponent, format::Color};
-use tokio::io::{BufReader, BufWriter};
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::io::{AsyncRead, AsyncWrite, BufReader, BufWriter};
 use tokio::select;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, error::TryRecvError};
 use tokio::time::timeout;
@@ -41,8 +40,15 @@ use crate::player::connection::NetworkConnection;
 use crate::player::{Player, PlayerSession};
 use crate::server::Server;
 
+/// Boxed read half of a Java client transport (a TCP socket or an in-memory pipe).
+pub type JavaTransportRead = Box<dyn AsyncRead + Send + Unpin>;
+/// Boxed write half of a Java client transport.
+pub type JavaTransportWrite = Box<dyn AsyncWrite + Send + Unpin>;
+/// Packet decoder over the read half of a Java client transport.
+pub type JavaNetworkReader = TCPNetworkDecoder<BufReader<JavaTransportRead>>;
 /// Shared Java socket writer.
-pub type JavaNetworkWriter = Arc<AsyncMutex<Option<TCPNetworkEncoder<BufWriter<OwnedWriteHalf>>>>>;
+pub type JavaNetworkWriter =
+    Arc<AsyncMutex<Option<TCPNetworkEncoder<BufWriter<JavaTransportWrite>>>>>;
 
 const DISCONNECT_FLUSH_TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -725,6 +731,18 @@ impl JavaConnection {
             play::S_CHAT_COMMAND => scheduled(ScheduledPlayPacketKind::ChatCommand(
                 SChatCommand::read_packet(data)?,
             )),
+            play::S_CHAT_COMMAND_SIGNED => {
+                // Sent instead of S_CHAT_COMMAND whenever the client considers one of the
+                // command's arguments signable (e.g. a message-shaped argument), so it can
+                // prove that argument's content to other clients via chat reporting. Steel
+                // doesn't implement chat reporting, so the argument signatures and the
+                // last-seen acknowledgment window aren't consumed here - only the command
+                // text itself, same as the unsigned path.
+                let signed = SChatCommandSigned::read_packet(data)?;
+                scheduled(ScheduledPlayPacketKind::ChatCommand(SChatCommand {
+                    command: signed.command,
+                }))
+            }
             play::S_COMMAND_SUGGESTION => scheduled(ScheduledPlayPacketKind::CommandSuggestion(
                 SCommandSuggestion::read_packet(data)?,
             )),
@@ -816,11 +834,7 @@ impl JavaConnection {
     }
 
     /// Listens for packets from the client.
-    pub async fn listener(
-        &self,
-        mut reader: TCPNetworkDecoder<BufReader<OwnedReadHalf>>,
-        server: Arc<Server>,
-    ) {
+    pub async fn listener(&self, mut reader: JavaNetworkReader, server: Arc<Server>) {
         loop {
             select! {
                 () = self.wait_for_close() => {
@@ -977,6 +991,11 @@ mod tests {
     use steel_protocol::packets::game::{ClickType, ClientCommandAction, HashedStack};
     use steel_registry::{blocks::properties::Direction, item_stack::ItemStack};
     use steel_utils::{BlockPos, codec::VarInt, types::InteractionHand};
+    use tokio::{
+        io::{AsyncReadExt as _, duplex},
+        sync::mpsc,
+        task,
+    };
     use uuid::Uuid;
 
     use super::*;
@@ -1365,5 +1384,75 @@ mod tests {
                 }
             ))
         ));
+    }
+
+    #[test]
+    fn signed_chat_command_decodes_to_the_same_kind_as_the_unsigned_one() {
+        use steel_utils::serial::{PrefixedWrite as _, WriteTo as _};
+
+        let mut payload = Vec::new();
+        "/ban Steve griefing"
+            .write_prefixed::<VarInt>(&mut payload)
+            .expect("command should write");
+        0i64.write(&mut payload).expect("timestamp should write");
+        0i64.write(&mut payload).expect("salt should write");
+        VarInt(0)
+            .write(&mut payload)
+            .expect("argument signature count should write");
+        VarInt(0)
+            .write(&mut payload)
+            .expect("last-seen offset should write");
+        payload.extend_from_slice(&[0u8; 3]);
+
+        let decoded = decode(RawPacket::new(play::S_CHAT_COMMAND_SIGNED, payload));
+
+        assert!(matches!(
+            decoded,
+            DecodedPlayPacket::Scheduled(ScheduledPlayPacket(ScheduledPlayPacketKind::ChatCommand(
+                SChatCommand { command }
+            ))) if command == "/ban Steve griefing"
+        ));
+    }
+
+    #[tokio::test]
+    async fn sender_writes_packets_through_a_boxed_transport() {
+        let (server_end, mut client_end) = duplex(1024);
+        let transport: JavaTransportWrite = Box::new(server_end);
+        let network_writer: JavaNetworkWriter = Arc::new(AsyncMutex::new(Some(
+            TCPNetworkEncoder::new(BufWriter::new(transport)),
+        )));
+        let (outgoing_packets, outgoing_receiver) = mpsc::unbounded_channel();
+        let cancel_token = CancellationToken::new();
+        let connection = Arc::new(JavaConnection::new(
+            outgoing_packets,
+            cancel_token.clone(),
+            None,
+            network_writer,
+            1,
+            Arc::new(PlayerSession::new(10, 10)),
+        ));
+        let sender = task::spawn({
+            let connection = Arc::clone(&connection);
+            async move { connection.sender(outgoing_receiver).await }
+        });
+
+        let Ok(packet) =
+            EncodedPacket::from_bare(CKeepAlive { id: 7 }, None, ConnectionProtocol::Play)
+        else {
+            panic!("keep alive should encode");
+        };
+        let expected = packet.encoded_data.as_slice().to_vec();
+        connection.send_encoded(packet);
+
+        let mut received = vec![0; expected.len()];
+        let Ok(_) = client_end.read_exact(&mut received).await else {
+            panic!("client end should receive the framed packet");
+        };
+        assert_eq!(received, expected);
+
+        cancel_token.cancel();
+        let Ok(()) = sender.await else {
+            panic!("sender task should finish after cancellation");
+        };
     }
 }

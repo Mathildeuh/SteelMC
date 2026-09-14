@@ -47,9 +47,10 @@ fn ban_ip_without_reason(
 fn ban_ip_with_reason(
     context: &SteelCommandContext<CommandSource>,
 ) -> Result<BanIpCommandSuspension, CommandSyntaxError> {
-    let reason = context.message("reason")?;
-    let reason = TextComponent::from_snbt(reason)
-        .unwrap_or_else(|_| TextComponent::plain(reason.to_owned()));
+    let reason = match TextComponent::from_snbt(context.message_text("reason")?) {
+        Ok(reason) => reason,
+        Err(_) => context.message("reason")?,
+    };
     start_ban_ip(context, Some(reason))
 }
 
