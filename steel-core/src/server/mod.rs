@@ -37,7 +37,7 @@ use crate::entity::{
     Entity, EntityBase, PendingWorldChangeToken, RemovalReason, SharedEntity, change_entity_world,
 };
 
-use crate::ban::BanListManager;
+use crate::ban::{BanListManager, IpBanListManager};
 use crate::chunk_saver::{ChunkStorage, PersistentEntity, registry::WorldStorageRegistry};
 use crate::level_data::{GameTimeSource, LevelDataManager, RespawnData, WorldGenerationSettings};
 use crate::permission::{
@@ -382,6 +382,8 @@ pub struct Server {
     pub permission_groups: PermissionGroupManager,
     /// Runtime player ban list and its persistence boundary.
     pub ban_list: BanListManager,
+    /// Runtime IP ban list and its persistence boundary.
+    pub ip_ban_list: IpBanListManager,
     /// Runtime whitelist and its persistence boundary.
     pub whitelist: WhitelistManager,
     /// The cancellation token for graceful shutdown.
@@ -523,6 +525,10 @@ impl Server {
     }
 
     /// Creates a new server with only Steel's built-in commands.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each parameter is an independently constructed startup dependency"
+    )]
     pub async fn new(
         chunk_runtime: Arc<Runtime>,
         cancel_token: CancellationToken,
@@ -530,6 +536,7 @@ impl Server {
         worlds_config: WorldsConfig,
         permission_groups: PermissionGroupManager,
         ban_list: BanListManager,
+        ip_ban_list: IpBanListManager,
         whitelist: WhitelistManager,
     ) -> Result<Self, String> {
         Self::new_with_commands(
@@ -539,6 +546,7 @@ impl Server {
             worlds_config,
             permission_groups,
             ban_list,
+            ip_ban_list,
             whitelist,
             CommandRegistry::new(),
         )
@@ -561,6 +569,7 @@ impl Server {
         worlds_config: WorldsConfig,
         permission_groups: PermissionGroupManager,
         ban_list: BanListManager,
+        ip_ban_list: IpBanListManager,
         whitelist: WhitelistManager,
         command_registry: CommandRegistry,
     ) -> Result<Self, String> {
@@ -747,6 +756,7 @@ impl Server {
             config,
             permission_groups,
             ban_list,
+            ip_ban_list,
             whitelist,
             cancel_token,
             key_store: KeyStore::create(),

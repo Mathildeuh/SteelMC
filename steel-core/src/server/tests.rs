@@ -41,7 +41,7 @@ use tokio::{
 };
 use uuid::Uuid;
 
-use crate::ban::BanListManager;
+use crate::ban::{BanListManager, IpBanListManager};
 use crate::behavior::init_behaviors;
 use crate::command::execution::{
     CommandArgumentSource, CommandExecutionContext, CommandPermissionSource, CommandResultCallback,
@@ -164,8 +164,12 @@ impl NetworkConnection for RecordingConnection {
 }
 
 fn test_runtime_config() -> Arc<RuntimeConfig> {
+    test_runtime_config_with_max_players(1)
+}
+
+fn test_runtime_config_with_max_players(max_players: u32) -> Arc<RuntimeConfig> {
     Arc::new(RuntimeConfig {
-        max_players: 1,
+        max_players,
         view_distance: 2,
         simulation_distance: 2,
         online_mode: false,
@@ -193,17 +197,27 @@ async fn test_server(
     player_permission_states: PermissionSubjectIndex,
     storage_root: &Path,
 ) -> Result<Arc<Server>, String> {
+    test_server_with_max_players(world, player_permission_states, storage_root, 1).await
+}
+
+async fn test_server_with_max_players(
+    world: Arc<World>,
+    player_permission_states: PermissionSubjectIndex,
+    storage_root: &Path,
+    max_players: u32,
+) -> Result<Arc<Server>, String> {
     let domain = ResolvedDomainConfig {
         name: world.domain().to_owned(),
         default_world: world.key.clone(),
         worlds: vec![world.key.clone()],
     };
-    test_server_with_worlds(
+    test_server_with_worlds_and_config(
         domain.name.clone(),
         slice::from_ref(&domain),
         slice::from_ref(&world),
         player_permission_states,
         storage_root,
+        test_runtime_config_with_max_players(max_players),
     )
     .await
 }
@@ -214,6 +228,25 @@ async fn test_server_with_worlds(
     loaded_worlds: &[Arc<World>],
     player_permission_states: PermissionSubjectIndex,
     storage_root: &Path,
+) -> Result<Arc<Server>, String> {
+    test_server_with_worlds_and_config(
+        default_domain,
+        domains,
+        loaded_worlds,
+        player_permission_states,
+        storage_root,
+        test_runtime_config(),
+    )
+    .await
+}
+
+async fn test_server_with_worlds_and_config(
+    default_domain: String,
+    domains: &[ResolvedDomainConfig],
+    loaded_worlds: &[Arc<World>],
+    player_permission_states: PermissionSubjectIndex,
+    storage_root: &Path,
+    config: Arc<RuntimeConfig>,
 ) -> Result<Arc<Server>, String> {
     let mut worlds = WorldMap::new(default_domain, domains, &[]);
     for world in loaded_worlds {
@@ -242,14 +275,15 @@ async fn test_server_with_worlds(
     let permission_groups = PermissionGroupManager::transient(PermissionGroupsConfig::default())
         .map_err(|error| format!("test permission groups should resolve: {error}"))?;
     let ban_list = BanListManager::transient();
+    let ip_ban_list = IpBanListManager::transient();
     let whitelist = WhitelistManager::transient();
-    let config = test_runtime_config();
     let registry_cache = RegistryCache::new(config.compression);
 
     Ok(Arc::new(Server {
         config,
         permission_groups,
         ban_list,
+        ip_ban_list,
         whitelist,
         cancel_token: CancellationToken::new(),
         key_store: KeyStore::create(),
@@ -291,6 +325,7 @@ async fn test_server_with_worlds(
 }
 
 mod connection_lifecycle;
+mod player_limit;
 
 #[test]
 #[expect(
@@ -2595,10 +2630,11 @@ fn initial_player_info_precedes_entity_spawn_for_existing_players() {
 
     runtime.block_on(async {
         let storage_root = test_storage_root("join-player-info-before-spawn");
-        let server = test_server(
+        let server = test_server_with_max_players(
             Arc::clone(&world),
             PermissionSubjectIndex::new(),
             &storage_root,
+            2,
         )
         .await;
         let Ok(server) = server else {
@@ -3931,6 +3967,7 @@ default = true
         PermissionGroupManager::transient(PermissionGroupsConfig::default())
             .expect("default permission groups should resolve"),
         BanListManager::transient(),
+        IpBanListManager::transient(),
         WhitelistManager::transient(),
     )
     .await

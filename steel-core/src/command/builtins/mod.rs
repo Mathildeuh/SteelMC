@@ -1,6 +1,8 @@
 //! Steel-owned built-in command declarations.
 
 mod ban;
+mod ban_ip;
+mod banlist;
 mod clear;
 mod damage;
 mod difficulty;
@@ -21,6 +23,7 @@ mod locate;
 mod msg;
 mod operator;
 mod pardon;
+mod pardon_ip;
 mod perms;
 mod playsound;
 mod return_command;
@@ -70,6 +73,8 @@ pub(crate) fn create_registered_dispatcher(
     builder.declare_permission(perms::GROUP_ALL_PERMISSION)?;
     builder.declare_permission(perms::METADATA_PERMISSION)?;
     builder.register(ban::registration())?;
+    builder.register(ban_ip::registration())?;
+    builder.register(banlist::registration())?;
     builder.register(clear::registration())?;
     builder.register(operator::deop_registration())?;
     builder.register(damage::registration())?;
@@ -90,6 +95,7 @@ pub(crate) fn create_registered_dispatcher(
     builder.register(msg::registration())?;
     builder.register(operator::op_registration())?;
     builder.register(pardon::registration())?;
+    builder.register(pardon_ip::registration())?;
     builder.register(perms::registration())?;
     builder.register(playsound::registration())?;
     builder.register(return_command::registration())?;
@@ -153,6 +159,8 @@ mod tests {
             names,
             [
                 "ban",
+                "ban-ip",
+                "banlist",
                 "clear",
                 "deop",
                 "damage",
@@ -176,6 +184,7 @@ mod tests {
                 "w",
                 "op",
                 "pardon",
+                "pardon-ip",
                 "perms",
                 "playsound",
                 "return",
