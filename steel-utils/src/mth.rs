@@ -15,11 +15,8 @@ mod tests {
     fn ceil_log2_matches_vanilla_worked_examples() {
         assert_eq!(ceil_log2(0), 0);
         assert_eq!(ceil_log2(1), 0);
-        // 64 possible ids still fit in 6 bits (ids 0..=63).
         assert_eq!(ceil_log2(64), 6);
-        // A 65th id needs a 7th bit, matching the issue's 66-biome regression.
         assert_eq!(ceil_log2(65), 7);
-        // 26.2's block-state count needs 15 bits, matching the old hardcoded value.
         assert_eq!(ceil_log2(32_366), 15);
         assert_eq!(ceil_log2(35_723), 16);
     }
