@@ -65,6 +65,14 @@ impl JavaTcpClient {
             self.kick(ban.disconnect_message()).await;
             return ConnectionAction::none();
         }
+        // Reject full-server logins before evicting an existing session.
+        if self.server.is_player_limit_reached(profile.id) {
+            self.kick(TextComponent::translated(
+                translations::MULTIPLAYER_DISCONNECT_SERVER_FULL.msg(),
+            ))
+            .await;
+            return ConnectionAction::none();
+        }
         let action = self.send_login_compression().await;
         if !self.disconnect_duplicate_player(&profile).await {
             return ConnectionAction::none();
