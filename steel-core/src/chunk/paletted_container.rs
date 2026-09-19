@@ -441,7 +441,7 @@ impl<V: Hash + Eq + Copy + Default + Debug, const DIM: usize> PalettedContainer<
 /// registry rather than a fixed width.
 fn block_state_global_bits() -> u8 {
     static BITS: OnceLock<u8> = OnceLock::new();
-    *BITS.get_or_init(|| ceil_log2(usize::from(REGISTRY.blocks.next_state_id)))
+    ceil_log2(usize::from(REGISTRY.blocks.next_state_id))
 }
 
 /// Bits per entry for the biome global palette. See [`block_state_global_bits`].
