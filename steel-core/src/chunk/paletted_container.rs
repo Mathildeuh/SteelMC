@@ -440,7 +440,6 @@ impl<V: Hash + Eq + Copy + Default + Debug, const DIM: usize> PalettedContainer<
 /// constant here. Matches vanilla, which sizes the global palette from the
 /// registry rather than a fixed width.
 fn block_state_global_bits() -> u8 {
-    static BITS: OnceLock<u8> = OnceLock::new();
     ceil_log2(usize::from(REGISTRY.blocks.next_state_id))
 }
 
