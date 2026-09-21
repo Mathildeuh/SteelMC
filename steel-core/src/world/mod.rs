@@ -97,9 +97,7 @@ use crate::{
         entity_loot_ref,
     },
     fluid::{FluidStateExt as _, fluid_state_to_block},
-    level_data::{
-        GameTime, GameTimeSource, LevelDataManager, RespawnData, WorldGenerationSettings,
-    },
+    level_data::{LevelDataManager, RespawnData, WorldGenerationSettings},
     player::{LastSeen, Player, connection::NetworkConnection},
     poi::PointOfInterestStorage,
 };
@@ -204,8 +202,6 @@ pub enum ConditionalBlockSetResult {
 /// Configuration for creating a new world.
 #[derive(Clone)]
 pub struct WorldConfig {
-    /// Domain game-time authority, bound during construction.
-    pub game_time_source: GameTimeSource,
     /// Storage configuration for chunk persistence.
     pub storage: WorldStorageConfig,
     /// Directory for level data. `None` means level data is ephemeral.
@@ -250,7 +246,6 @@ pub struct World {
     pub dimension_type: DimensionTypeRef,
     /// Level data manager for persistent world state.
     pub level_data: SyncRwLock<LevelDataManager>,
-    pub(crate) game_time: Arc<GameTime>,
     /// Per-world saved data storage.
     pub(crate) saved_data: SavedDataManager,
     /// Runtime world border state.
@@ -339,6 +334,10 @@ impl World {
         .await
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "world construction keeps storage, level data, and runtime initialization together"
+    )]
     pub(crate) async fn new_with_config_and_encoding_pool(
         chunk_runtime: Arc<Runtime>,
         key: Identifier,
@@ -369,14 +368,9 @@ impl World {
 
         let path = config.level_data_path.as_deref().map(Path::new);
         let saved_data = SavedDataManager::new(path);
-        let mut level_data = LevelDataManager::new(
-            path,
-            seed,
-            config.difficulty,
-            config.generation_settings,
-            config.game_time_source,
-        )
-        .await?;
+        let mut level_data =
+            LevelDataManager::new(path, seed, config.difficulty, config.generation_settings)
+                .await?;
         if level_data.is_dirty() {
             level_data.save().await?;
         }
@@ -432,7 +426,6 @@ impl World {
                 player_area_map: PlayerAreaMap::new(),
                 key,
                 dimension_type,
-                game_time: level_data.game_time_handle(),
                 level_data: SyncRwLock::new(level_data),
                 saved_data,
                 world_border: SyncMutex::new(world_border),
