@@ -1,5 +1,6 @@
 //! Build script for steel-utils that generates translation constants.
 
+use chrono::{DateTime, Utc};
 use reqwest::blocking::{self, Response};
 use serde::Deserialize;
 use sha1::{Digest, Sha1};
@@ -407,6 +408,7 @@ fn download_and_extract_assets(manifest_dir: &str) {
 /// Generates the version constants from the `version.json` extracted from
 /// the target server jar, mirroring `DetectedVersion.tryDetectVersion`.
 fn build_version_constants(manifest_dir: &str) -> String {
+    println!("cargo:rerun-if-changed=build_assets/version.json");
     let target_version = get_target_mc_version();
     let version_json_path = Path::new(manifest_dir)
         .join("build_assets")
@@ -421,6 +423,11 @@ fn build_version_constants(manifest_dir: &str) -> String {
     );
     let data_pack_version =
         format_pack_version(info.pack_version.data_major, info.pack_version.data_minor);
+    let build_time = DateTime::parse_from_rfc3339(&info.build_time)
+        .unwrap_or_else(|e| panic!("Failed to parse build_time {:?}: {e}", info.build_time))
+        .with_timezone(&Utc)
+        .format("%a %b %d %H:%M:%S UTC %Y")
+        .to_string();
 
     format!(
         "/// The targeted Minecraft version.\n\
@@ -433,7 +440,7 @@ fn build_version_constants(manifest_dir: &str) -> String {
          pub const DATA_VERSION: i32 = {world_version};\n\
          /// Vanilla `DataVersion.series`.\n\
          pub const DATA_VERSION_SERIES: &str = {series_id:?};\n\
-         /// Vanilla `WorldVersion.buildTime`, as the ISO-8601 string from `version.json`.\n\
+         /// Vanilla `WorldVersion.buildTime`, formatted like Java's `Date.toString` in UTC.\n\
          pub const BUILD_TIME: &str = {build_time:?};\n\
          /// Vanilla `WorldVersion.packVersion(PackType.CLIENT_RESOURCES)`, formatted like `PackFormat::toString`.\n\
          pub const RESOURCE_PACK_VERSION: &str = {resource_pack_version:?};\n\
@@ -445,7 +452,6 @@ fn build_version_constants(manifest_dir: &str) -> String {
         name = info.name,
         world_version = info.world_version,
         series_id = info.series_id,
-        build_time = info.build_time,
         stable = info.stable,
     )
 }

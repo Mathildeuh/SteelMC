@@ -9,6 +9,7 @@ use super::super::{
     execution::{CommandSource, SteelCommandContext, SteelCommandRuntime, literal},
     registration::CommandRegistration,
 };
+use crate::GIT_HASH_SHORT;
 
 pub(super) fn registration() -> CommandRegistration<CommandSource> {
     CommandRegistration::new(Identifier::vanilla_static("version"), |_| command())
@@ -18,10 +19,7 @@ fn command() -> CommandNodeBuilder<CommandSource, SteelCommandRuntime> {
     literal("version").executes(send_version)
 }
 
-/// Reports the targeted vanilla version the way `VersionCommand#dumpVersion`
-/// does, using the `version.json` the build script extracts from the target
-/// server jar for everything but the protocol number (already tracked by
-/// `steel_registry::packets::CURRENT_MC_PROTOCOL`).
+/// Reports the targeted Minecraft version details.
 #[expect(
     clippy::unnecessary_wraps,
     reason = "Command executors use a shared fallible callback signature."
@@ -78,6 +76,9 @@ fn send_version(context: &SteelCommandContext<CommandSource>) -> Result<i32, Com
         &translations::COMMANDS_VERSION_STABLE_NO
     };
     source.send_system_message(&TextComponent::from(stable));
+    source.send_system_message(&TextComponent::plain(format!(
+        "steel_commit = {GIT_HASH_SHORT}"
+    )));
     Ok(1)
 }
 
