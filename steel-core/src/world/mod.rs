@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use crate::chunk::chunk_ticket_storage::{ChunkTicketStorage, PersistentChunkTickets};
+use crate::chunk::chunk_ticket_storage::ChunkTicketStorage;
 use crate::chunk::full_chunk::{FullChunkBlockSetResult, FullChunkRef};
 use crate::chunk::gameplay_chunk_lookup_cache::GameplayChunkLookupCacheScope;
 use crate::chunk::light::{
@@ -339,10 +339,6 @@ impl World {
         .await
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "world construction keeps storage, level data, and runtime initialization together"
-    )]
     pub(crate) async fn new_with_config_and_encoding_pool(
         chunk_runtime: Arc<Runtime>,
         key: Identifier,
@@ -384,16 +380,7 @@ impl World {
         if level_data.is_dirty() {
             level_data.save().await?;
         }
-        let persistent_chunk_tickets = saved_data
-            .load_or_default::<PersistentChunkTickets>(saved_data_names::CHUNK_TICKETS)
-            .await
-            .unwrap_or_else(|error| {
-                log::warn!(
-                    "Could not load chunk ticket data for world {key}; starting with none: {error}"
-                );
-                PersistentChunkTickets::default()
-            });
-        let ticket_storage = ChunkTicketStorage::from_persistent(persistent_chunk_tickets);
+        let ticket_storage = ChunkTicketStorage::load(&saved_data, &key).await;
         let world_border = WorldBorder::new(level_data.data().world_border)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         // let generator = Arc::new(ChunkGeneratorType::Flat(FlatChunkGenerator::new(

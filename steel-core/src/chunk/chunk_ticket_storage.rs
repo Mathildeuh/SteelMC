@@ -5,6 +5,7 @@ use std::cmp::Ordering;
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use steel_registry::{REGISTRY, RegistryExt, ticket_type::TicketTypeRef, vanilla_ticket_types};
+use steel_utils::saved_data::{SavedDataManager, names as saved_data_names};
 use steel_utils::{ChunkPos, Identifier};
 use thiserror::Error;
 
@@ -24,13 +25,7 @@ pub(crate) struct PersistentChunkTickets {
     tickets: Vec<PersistentChunkTicket>,
 }
 
-/// Decodes the saved ticket list one entry at a time, keeping the valid entries
-/// and logging each rejected one with its position in the list.
-///
-/// A single malformed entry — a missing field, a wrong field type — no longer
-/// drops the rest of the tickets. Entries are not repaired: required fields stay
-/// required, without guessed defaults. A document that is not a ticket list at
-/// all still fails, and the caller falls back to empty ticket storage.
+/// Decodes the saved ticket list one entry at a time and logs and skips invalid entries.
 fn deserialize_lenient_tickets<'de, D>(
     deserializer: D,
 ) -> Result<Vec<PersistentChunkTicket>, D::Error>
@@ -180,11 +175,21 @@ impl ChunkTicketStorage {
         Self::default()
     }
 
-    /// Restores registered ticket types from saved data.
-    ///
-    /// Entries that cannot be restored — an unknown ticket type, an out-of-range
-    /// level — are logged and skipped, keeping the rest. Matching vanilla, a
-    /// single bad entry never fails the whole load.
+    /// Loads saved tickets, starting with none if the saved data cannot be read.
+    pub(crate) async fn load(saved_data: &SavedDataManager, world: &Identifier) -> Self {
+        let persistent = saved_data
+            .load_or_default::<PersistentChunkTickets>(saved_data_names::CHUNK_TICKETS)
+            .await
+            .unwrap_or_else(|error| {
+                log::warn!(
+                    "Could not load chunk ticket data for world {world}; starting with none: {error}"
+                );
+                PersistentChunkTickets::default()
+            });
+        Self::from_persistent(persistent)
+    }
+
+    /// Restores registered ticket types from saved data and logs and skips entries that cannot be restored.
     pub(crate) fn from_persistent(persistent: PersistentChunkTickets) -> Self {
         let mut storage = Self::new();
         for persistent_ticket in persistent.tickets {
