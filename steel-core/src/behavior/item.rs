@@ -1,5 +1,6 @@
 //! Item behavior trait and registry.
 
+use crate::player::player_inventory::Prediction;
 use std::sync::Arc;
 
 use std::borrow::Cow;
@@ -21,7 +22,7 @@ use crate::behavior::items::{DefaultItemBehavior, SpawnEggItem};
 use crate::behavior::{InteractionResult, InventoryTickContext, UseItemContext, UseOnContext};
 use crate::entity::consume_effect::apply_consume_effect;
 use crate::entity::damage::DamageSource;
-use crate::entity::{Entity, LivingEntity};
+use crate::entity::{Entity, LivingEntity, LivingEntityRef, SharedEntity};
 use crate::player::{Player, player_inventory::EquipmentSwapResult};
 use crate::world::World;
 
@@ -35,14 +36,15 @@ pub use steel_registry::data_components::vanilla_components::ItemUseAnimation;
 /// - etc.
 pub trait ItemBehavior: Send + Sync {
     /// Returns the Rust type name of the concrete behavior implementation.
-    #[cfg(feature = "flint")]
+    #[cfg(feature = "test-framework")]
     #[must_use]
     #[expect(clippy::absolute_paths, reason = "easier for features")]
     fn type_name(&self) -> &'static str {
         std::any::type_name::<Self>()
     }
 
-    /// Returns vanilla `Item.getName(stack)`.
+    /// Returns this item's display name, from the stack's `item_name`
+    /// component if present.
     fn get_name<'a>(&self, stack: &'a ItemStack) -> Cow<'a, TextComponent> {
         stack
             .get(ITEM_NAME)
@@ -77,7 +79,7 @@ pub trait ItemBehavior: Send + Sync {
                 context.player.start_using_item(context.hand);
             } else {
                 let stack = context.inv.with_item(|item| item.clone());
-                let result = finish_consuming_stack(&stack, context.world, context.player);
+                let result = finish_consuming_stack(&stack, context.world, context.player.as_ref());
                 context.inv.with_item(|item| *item = result);
             }
             return InteractionResult::Consume;
@@ -103,7 +105,9 @@ pub trait ItemBehavior: Send + Sync {
         match result {
             EquipmentSwapResult::Success(overflow) => {
                 if !overflow.is_empty() {
-                    let _ = context.player.drop_item(overflow, false, false);
+                    let _ = context
+                        .player
+                        .drop_item(overflow, false, Prediction::Predicted);
                 }
                 InteractionResult::Success
             }
@@ -111,7 +115,8 @@ pub trait ItemBehavior: Send + Sync {
         }
     }
 
-    /// Returns vanilla `Item.getUseAnimation`.
+    /// Returns which animation plays while this item is actively being used,
+    /// based on its data components.
     fn get_use_animation(&self, stack: &ItemStack) -> ItemUseAnimation {
         if let Some(consumable) = stack.get(CONSUMABLE) {
             consumable.animation()
@@ -124,7 +129,8 @@ pub trait ItemBehavior: Send + Sync {
         }
     }
 
-    /// Returns vanilla `Item.getUseDuration`.
+    /// Returns how many ticks this item can be held in active use before it
+    /// finishes automatically.
     fn get_use_duration(&self, stack: &ItemStack, _user: &dyn LivingEntity) -> i32 {
         if let Some(consumable) = stack.get(CONSUMABLE) {
             consumable.consume_ticks()
@@ -139,14 +145,14 @@ pub trait ItemBehavior: Send + Sync {
     fn on_use_tick(
         &self,
         _world: &Arc<World>,
-        user: &dyn LivingEntity,
+        user: LivingEntityRef<'_>,
         stack: &mut ItemStack,
         ticks_remaining: i32,
     ) {
         if let Some(consumable) = stack.get(CONSUMABLE)
             && should_emit_consume_particles_and_sounds(consumable, ticks_remaining)
         {
-            emit_consume_particles_and_sounds(consumable, user);
+            emit_consume_particles_and_sounds(consumable, user.living());
         }
     }
 
@@ -173,12 +179,13 @@ pub trait ItemBehavior: Send + Sync {
         &self,
         stack: &mut ItemStack,
         world: &Arc<World>,
-        user: &dyn LivingEntity,
+        user: LivingEntityRef<'_>,
     ) -> ItemStack {
-        finish_consuming_stack(stack, world, user)
+        finish_consuming_stack(stack, world, user.living())
     }
 
-    /// Called by vanilla `ItemStack.interactLivingEntity`.
+    /// Called when this item is used to interact with a living entity
+    /// (e.g. right-clicking a mob while holding it).
     fn interact_living_entity(
         &self,
         _stack: &mut ItemStack,
@@ -189,8 +196,9 @@ pub trait ItemBehavior: Send + Sync {
         InteractionResult::Pass
     }
 
-    /// Returns vanilla `Item.getItemDamageSource`.
-    fn get_item_damage_source(&self, _attacker: &dyn LivingEntity) -> Option<DamageSource> {
+    /// Returns a custom damage source this item should inflict when its
+    /// wielder attacks, overriding the caller's default attack damage type.
+    fn get_item_damage_source(&self, _attacker: &SharedEntity) -> Option<DamageSource> {
         None
     }
 
@@ -205,7 +213,8 @@ pub trait ItemBehavior: Send + Sync {
         0.0
     }
 
-    /// Called by vanilla `Item.hurtEnemy`.
+    /// Called immediately when this item's wielder deals a successful melee
+    /// hit, before post-attack enchantment effects and durability loss.
     fn hurt_enemy(
         &self,
         _stack: &mut ItemStack,
@@ -214,7 +223,8 @@ pub trait ItemBehavior: Send + Sync {
     ) {
     }
 
-    /// Called by vanilla `Item.postHurtEnemy`.
+    /// Called after `hurt_enemy` and post-attack enchantment effects, right
+    /// before the item takes durability damage from the hit.
     fn post_hurt_enemy(
         &self,
         _stack: &mut ItemStack,
@@ -253,7 +263,6 @@ fn should_emit_consume_particles_and_sounds(consumable: &Consumable, ticks_remai
     ticks_used > wait_ticks && ticks_remaining % 4 == 0
 }
 
-/// Mirrors vanilla `Consumable.emitParticlesAndSounds`
 fn emit_consume_particles_and_sounds(consumable: &Consumable, user: &dyn LivingEntity) {
     // TODO: spawn item-crumb particles when `has_consume_particles()` is set.
     let (volume, pitch) = if consumable.animation() == ItemUseAnimation::Drink {
@@ -406,7 +415,7 @@ impl ItemBehaviorRegistry {
     }
 
     /// Get all behaviors.
-    #[cfg(feature = "flint")]
+    #[cfg(feature = "test-framework")]
     #[must_use]
     pub fn get_behaviors(&self) -> &[Box<dyn ItemBehavior>] {
         &self.behaviors
@@ -421,6 +430,8 @@ impl Default for ItemBehaviorRegistry {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use steel_registry::data_components::{Consumable, vanilla_components};
     use steel_registry::item_stack::ItemStack;
     use steel_registry::stat::vanilla_stat_types;
@@ -442,9 +453,10 @@ mod tests {
     fn honey_bottle_stack_keeps_remaining_bottles_and_hands_off_the_remainder() {
         init_vanilla_registry();
         init_behaviors();
-        let world = fresh_test_world("finish_consuming_honey_bottle_stack");
-        insert_ready_full_chunk(&world, ChunkPos::new(0, 0));
-        let player = TestPlayerBuilder::new(world.clone(), "Test", 1).build();
+        let world_fixture = fresh_test_world("finish_consuming_honey_bottle_stack");
+        let world = &world_fixture.world;
+        insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+        let player = TestPlayerBuilder::new(Arc::clone(world), "Test", 1).build();
         player.set_client_loaded(true);
 
         // Fill the inventory so the glass bottle remainder cannot be stored
@@ -458,7 +470,7 @@ mod tests {
         }
 
         let stack = ItemStack::with_count(&vanilla_items::HONEY_BOTTLE, 5);
-        let result = finish_consuming_stack(&stack, &world, player.as_ref());
+        let result = finish_consuming_stack(&stack, world, player.as_ref());
 
         assert!(result.is(&vanilla_items::HONEY_BOTTLE));
         assert_eq!(result.count(), 4);
@@ -485,9 +497,10 @@ mod tests {
     fn instant_consumable_with_use_remainder_finishes_without_deadlocking() {
         init_vanilla_registry();
         init_behaviors();
-        let world = fresh_test_world("instant_consumable_no_deadlock");
-        insert_ready_full_chunk(&world, ChunkPos::new(0, 0));
-        let player = TestPlayerBuilder::new(world.clone(), "Test", 1).build();
+        let world_fixture = fresh_test_world("instant_consumable_no_deadlock");
+        let world = &world_fixture.world;
+        insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+        let player = TestPlayerBuilder::new(Arc::clone(world), "Test", 1).build();
         player.set_client_loaded(true);
 
         let mut stack = ItemStack::with_count(&vanilla_items::HONEY_BOTTLE, 2);
@@ -514,8 +527,8 @@ mod tests {
         let mut context = UseItemContext::new(
             &player,
             InteractionHand::MainHand,
-            &world,
-            player.inventory.clone(),
+            world,
+            Arc::clone(&player.inventory),
         );
 
         let result = behavior.use_item(&mut context);
@@ -551,9 +564,10 @@ mod tests {
     #[test]
     fn eating_food_applies_its_nutrition_and_saturation() {
         init_vanilla_registry();
-        let world = fresh_test_world("finish_consuming_food_applies_nutrition");
-        insert_ready_full_chunk(&world, ChunkPos::new(0, 0));
-        let player = TestPlayerBuilder::new(world.clone(), "Test", 1).build();
+        let world_fixture = fresh_test_world("finish_consuming_food_applies_nutrition");
+        let world = &world_fixture.world;
+        insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+        let player = TestPlayerBuilder::new(Arc::clone(world), "Test", 1).build();
         player.set_client_loaded(true);
         {
             let mut food = player.food_data.lock();
@@ -562,7 +576,7 @@ mod tests {
         }
 
         let stack = ItemStack::new(&vanilla_items::APPLE);
-        let _ = finish_consuming_stack(&stack, &world, player.as_ref());
+        let _ = finish_consuming_stack(&stack, world, player.as_ref());
 
         let food = player.food_data.lock();
         // Vanilla apple: nutrition 4, saturation 2.4.
@@ -575,13 +589,14 @@ mod tests {
     #[test]
     fn consuming_an_item_awards_the_item_used_stat() {
         init_vanilla_registry();
-        let world = fresh_test_world("finish_consuming_awards_item_used_stat");
-        insert_ready_full_chunk(&world, ChunkPos::new(0, 0));
-        let player = TestPlayerBuilder::new(world.clone(), "Test", 1).build();
+        let world_fixture = fresh_test_world("finish_consuming_awards_item_used_stat");
+        let world = &world_fixture.world;
+        insert_ready_full_chunk(world, ChunkPos::new(0, 0));
+        let player = TestPlayerBuilder::new(Arc::clone(world), "Test", 1).build();
         player.set_client_loaded(true);
 
         let stack = ItemStack::new(&vanilla_items::APPLE);
-        let _ = finish_consuming_stack(&stack, &world, player.as_ref());
+        let _ = finish_consuming_stack(&stack, world, player.as_ref());
 
         let apple_used = vanilla_stat_types::ITEM_USED.get(&vanilla_items::APPLE);
         assert_eq!(
