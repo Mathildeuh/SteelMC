@@ -518,7 +518,7 @@ impl ChunkMap {
 
     /// Returns whether the chunk is in block simulation range with confirmed r1 readiness.
     #[must_use]
-    pub(crate) fn is_block_ticking_full_chunk_simulated(&self, pos: ChunkPos) -> bool {
+    pub fn is_block_ticking_full_chunk_simulated(&self, pos: ChunkPos) -> bool {
         self.lookup_active_holder(pos).is_some_and(|holder| {
             is_block_ticking(holder.simulation_level())
                 && holder.ticking_readiness_snapshot().is_block_ticking()
@@ -665,7 +665,8 @@ impl ChunkMap {
         for dz in -radius..=radius {
             for dx in -radius..=radius {
                 let pos = ChunkPos::new(center.0.x + dx, center.0.y + dz);
-                let Some(holder) = self.chunks.read_sync(&pos, |_, holder| holder.clone()) else {
+                let Some(holder) = self.chunks.read_sync(&pos, |_, holder| Arc::clone(holder))
+                else {
                     return false;
                 };
                 if holder.try_chunk(ChunkStatus::Full).is_none() {
@@ -982,6 +983,14 @@ impl ChunkMap {
         self.process_unloads();
         timings.process_unloads = start.elapsed();
         timings
+    }
+
+    /// Flint entry point for [`Self::advance_scheduling`].
+    ///
+    /// Exposed only with the `test-framework` feature; the same calling constraint applies.
+    #[cfg(feature = "test-framework")]
+    pub fn flint_advance_scheduling(self: &Arc<Self>) -> ChunkMapSchedulingTimings {
+        self.advance_scheduling()
     }
 
     fn apply_simulation_changes(&self, changes: &[SimulationLevelChange]) -> bool {
@@ -1303,8 +1312,7 @@ impl ChunkMap {
             let mut lifecycle_dispatchers = unload
                 .holder
                 .try_full_chunk()
-                .map(|chunk| chunk.deactivate_block_entities(&unload.holder))
-                .unwrap_or_default();
+                .map_or_default(|chunk| chunk.deactivate_block_entities(&unload.holder));
             world
                 .block_entity_tickers()
                 .remove_positions(&unload.holder, &unload.positions);

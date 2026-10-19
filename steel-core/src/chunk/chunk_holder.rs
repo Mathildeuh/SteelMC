@@ -854,7 +854,7 @@ impl ChunkHolder {
             // just wait for it. Parent cancellation is handled by the owning
             // task's run loop dropping this future; a failed dependency returns
             // `None` from `await_claimed_chunk_status`.
-            let self_clone = self.clone();
+            let self_clone = Arc::clone(self);
             return Some(Box::pin(async move {
                 self_clone
                     .await_claimed_chunk_status(target_status)
@@ -863,10 +863,10 @@ impl ChunkHolder {
             }));
         };
 
-        let cache = cache.clone();
-        let context = chunk_map.world_gen_context.clone();
-        let self_clone = self.clone();
-        let storage = chunk_map.storage.clone();
+        let cache = Arc::clone(cache);
+        let context = Arc::clone(&chunk_map.world_gen_context);
+        let self_clone = Arc::clone(self);
+        let storage = Arc::clone(&chunk_map.storage);
         let save_dependency = self.add_save_dependency();
 
         let future = chunk_map.task_tracker.spawn(async move {
@@ -988,7 +988,7 @@ impl ChunkHolder {
             return None;
         }
 
-        let holder_for_notify = holder.clone();
+        let holder_for_notify = Arc::clone(&holder);
         let world = context.world();
         Self::run_step_task(thread_pool, step, context, cache, holder).await;
         holder_for_notify.finish_generation_status(target_status);
@@ -1096,7 +1096,7 @@ impl ChunkHolder {
         let has_parent = holder
             .published_status()
             .is_some_and(|status| parent_status <= status);
-        let holder_for_notify = holder.clone();
+        let holder_for_notify = Arc::clone(&holder);
 
         assert!(has_parent, "Parent chunk missing");
 
@@ -1571,7 +1571,8 @@ mod tests {
     #[test]
     fn full_registration_transfers_prepublication_block_and_fluid_ticks() {
         init_chunk_test_registry();
-        let world = fresh_test_world("prepublication_tick_transfer");
+        let world_fixture = fresh_test_world("prepublication_tick_transfer");
+        let world = &world_fixture.world;
         let chunk_pos = ChunkPos::new(0, 0);
         let min_y = world.get_min_y();
         let height = world.get_height();
@@ -1584,7 +1585,7 @@ mod tests {
             chunk_pos,
             min_y,
             height,
-            Arc::downgrade(&world),
+            Arc::downgrade(world),
         );
         let block_pos = BlockPos::new(1, min_y + 1, 1);
         let fluid_pos = BlockPos::new(2, min_y + 1, 2);

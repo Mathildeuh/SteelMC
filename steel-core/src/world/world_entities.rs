@@ -55,7 +55,7 @@ impl World {
         }
 
         tracing::error!(
-            player = %player.gameprofile.name,
+            player = %player.gameprofile.name(),
             target_world = %target_world.key,
             membership_count = memberships.len(),
             operation,
@@ -175,13 +175,13 @@ impl World {
             };
             if !rolled_back {
                 tracing::error!(
-                    player = %player.gameprofile.name,
+                    player = %player.gameprofile.name(),
                     world = %self.key,
                     "Respawn entity registration failed after world player ownership changed"
                 );
             }
             tracing::warn!(
-                player = %player.gameprofile.name,
+                player = %player.gameprofile.name(),
                 world = %self.key,
                 "Refusing to install respawned player entity: {error}"
             );
@@ -328,7 +328,7 @@ impl World {
         if Self::reject_duplicate_player_membership(&player, self, "world change") {
             return false;
         }
-        if !self.players.insert(player.clone()) {
+        if !self.players.insert(Arc::clone(&player)) {
             player.connection.close();
             return false;
         }

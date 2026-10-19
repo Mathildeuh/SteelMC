@@ -201,7 +201,7 @@ impl WorldSpawnTeleportJob {
         let search = PlayerSpawnSearch::new(
             &target_world,
             spawn_suggestion,
-            target_world.default_gamemode,
+            target_world.default_gamemode(),
         )?;
         Ok(Self {
             entity,
@@ -516,7 +516,7 @@ impl EndPortalTeleportJob {
         let search = PlayerSpawnSearch::new(
             &target_world,
             respawn_data.pos(),
-            target_world.default_gamemode,
+            target_world.default_gamemode(),
         )?;
         Ok(Self {
             entity,
@@ -606,7 +606,7 @@ impl ServerJob for EndPortalTeleportJob {
                         };
                         let request = target_world.request_player_spawn_chunks(position);
                         self.phase = EndPortalTeleportPhase::LoadingPlayerRespawn {
-                            target_world: target_world.clone(),
+                            target_world: Arc::clone(target_world),
                             spawn,
                             request,
                         };
@@ -811,7 +811,7 @@ fn restore_root_vehicle_for_player(
         ChunkStorage::persistent_to_entity_tree_at_level(&root_vehicle.entity, root_chunk, &level);
     if entities.is_empty() {
         tracing::warn!(
-            player = %player.gameprofile.name,
+            player = %player.gameprofile.name(),
             "Persisted RootVehicle did not recreate any runtime entities",
         );
         return;
@@ -824,7 +824,7 @@ fn restore_root_vehicle_for_player(
         .cloned()
     else {
         tracing::warn!(
-            player = %player.gameprofile.name,
+            player = %player.gameprofile.name(),
             attach = ?attach_uuid,
             "Discarding persisted RootVehicle because the attach entity is missing",
         );
@@ -834,7 +834,7 @@ fn restore_root_vehicle_for_player(
 
     if let Err(error) = world.register_loaded_entity_tree(&entities) {
         tracing::warn!(
-            player = %player.gameprofile.name,
+            player = %player.gameprofile.name(),
             attach = ?attach_uuid,
             root = ?Uuid::from_bytes(root_vehicle.entity.uuid),
             "Discarding persisted RootVehicle because its entity tree could not be registered: {error}",
@@ -843,7 +843,7 @@ fn restore_root_vehicle_for_player(
         return;
     }
 
-    let player_entity: SharedEntity = player.clone();
+    let player_entity: SharedEntity = Arc::<Player>::clone(player);
     EntityBase::restore_passenger_relationship(&attach_entity, &player_entity);
     attach_entity.position_rider(player.as_ref());
     player.send_restored_vehicle_mount_sync(attach_entity.as_ref());
@@ -917,7 +917,7 @@ impl ServerJob for EnderPearlRestoreJob {
         };
         if player_world.domain() != self.world.domain() {
             tracing::error!(
-                player = %player.gameprofile.name,
+                player = %player.gameprofile.name(),
                 player_domain = player_world.domain(),
                 pearl_domain = self.world.domain(),
                 "Discarding a pending ender pearl whose owner changed domains without a new residence"
@@ -963,28 +963,28 @@ fn restore_ender_pearl_for_player(
     let entities = ChunkStorage::persistent_to_entity_tree_at_level(entity, chunk, &level);
     let Some(pearl) = entities.first().cloned() else {
         tracing::warn!(
-            player = %player.gameprofile.name,
+            player = %player.gameprofile.name(),
             "Persisted ender pearl did not recreate a runtime entity",
         );
         return false;
     };
     if pearl.entity_type() != &vanilla_entities::ENDER_PEARL {
         tracing::warn!(
-            player = %player.gameprofile.name,
+            player = %player.gameprofile.name(),
             entity_type = ?pearl.entity_type().key,
             "Persisted ender pearl recreated a non-pearl root entity",
         );
         return false;
     }
 
-    let owner: SharedEntity = player.clone();
+    let owner: SharedEntity = Arc::<Player>::clone(player);
     for entity in &entities {
         entity.restore_owner_reference(&owner);
     }
 
     if let Err(error) = world.register_loaded_entity_tree(&entities) {
         tracing::warn!(
-            player = %player.gameprofile.name,
+            player = %player.gameprofile.name(),
             "Discarding persisted ender pearl because it could not be registered: {error}",
         );
         discard_restored_entities(&entities);
