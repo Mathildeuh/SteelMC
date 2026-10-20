@@ -19,6 +19,7 @@ use super::{
     },
     structure::{parse_structure_or_tag_key, suggest_structures},
     text::{CommandTextResolutionSource, CommandTextResolver, validate_component_syntax},
+    suggestions::suggest_resources,
     world::{parse_world_argument, suggest_worlds},
 };
 use crate::chunk::heightmap::HeightmapType;
@@ -34,6 +35,7 @@ use glam::DVec3;
 use steel_protocol::packets::game::{
     ArgumentType as ProtocolArgumentType, SuggestionType as ProtocolSuggestionType,
 };
+use steel_registry::advancement::registry::AdvancementRef;
 use steel_registry::damage_type::DamageTypeRef;
 use steel_registry::{
     DAMAGE_TYPE_REGISTRY, ENCHANTMENT_REGISTRY, ENTITY_TYPE_REGISTRY, REGISTRY, RegistryExt as _,
@@ -41,6 +43,7 @@ use steel_registry::{
     entity_type::EntityTypeRef, item_stack::ItemStack, timeline::TimelineRef,
     world_clock::WorldClockRef,
 };
+use steel_utils::translations::ADVANCEMENT_ADVANCEMENT_NOT_FOUND;
 use steel_utils::{
     Downcast as _, DowncastType, DowncastTypeKey, ErasedType, Identifier,
     nbt::{NbtPath, parse_snbt_argument},
@@ -353,6 +356,10 @@ impl SteelArgumentType {
         Self::new(SoundParser)
     }
 
+    pub(crate) fn advancement() -> Self {
+        Self::new(AdvancementParser)
+    }
+
     pub(crate) fn world_clock() -> Self {
         Self::new(WorldClockParser)
     }
@@ -529,6 +536,10 @@ argument_value_wrapper!(
 argument_value_wrapper!(
     EnchantmentValue(EnchantmentRef),
     "steel:command/value/enchantment"
+);
+argument_value_wrapper!(
+    AdvancementValue(AdvancementRef),
+    "steel:command/value/advancement"
 );
 argument_value_wrapper!(
     DamageTypeValue(DamageTypeRef),
@@ -1118,6 +1129,28 @@ unit_argument_parser!(
     )
 );
 unit_argument_parser!(
+    AdvancementParser,
+    "steel:command/parser/advancement",
+    AdvancementValue,
+    parse | reader,
+    _source | { Ok(AdvancementValue(parse_advancement(reader)?)) },
+    suggest | _context,
+    builder | {
+        suggest_resources(
+            REGISTRY
+                .advancements
+                .advancements()
+                .iter()
+                .map(|adv| adv.key()),
+            builder,
+        );
+    },
+    protocol(
+        ProtocolArgumentType::ResourceLocation,
+        Some(ProtocolSuggestionType::AskServer),
+    )
+);
+unit_argument_parser!(
     ItemStackParser,
     "steel:command/parser/item_stack",
     ItemStackValue,
@@ -1558,6 +1591,19 @@ fn parse_summonable_entity(
     Err(reader.error(CommandSyntaxErrorKind::Dynamic(Box::new(message))))
 }
 
+fn parse_advancement(reader: &mut StringReader<'_>) -> Result<AdvancementRef, CommandSyntaxError> {
+    parse_identifier(reader).and_then(|key| {
+        REGISTRY.advancements.by_key(&key).map_or(
+            Err(reader.error(CommandSyntaxErrorKind::Dynamic(Box::new(
+                TextComponent::translated(
+                    ADVANCEMENT_ADVANCEMENT_NOT_FOUND.message([key.to_string()]),
+                ),
+            )))),
+            |val| Ok(val.value()),
+        )
+    })
+}
+
 fn can_summon(entity_type: EntityTypeRef) -> bool {
     entity_type.summonable
         && ENTITIES
@@ -1629,28 +1675,6 @@ pub(super) fn unknown_resource(
     reader.error(CommandSyntaxErrorKind::Dynamic(Box::new(message)))
 }
 
-fn suggest_resources<'a>(
-    resources: impl Iterator<Item = &'a Identifier>,
-    builder: &mut SuggestionsBuilder<'_>,
-) {
-    let contents = builder.remaining_lowercase();
-    let has_namespace = contents.contains(':');
-    let suggestions = resources.filter_map(|resource| {
-        let full_name = resource.to_string();
-        let matches = if has_namespace {
-            matches_substring(contents, &full_name)
-        } else {
-            matches_substring(contents, resource.namespace.as_ref())
-                || matches_substring(contents, resource.path.as_ref())
-        };
-        matches.then_some(full_name)
-    });
-    let suggestions = suggestions.collect::<Vec<_>>();
-    for suggestion in suggestions {
-        builder.suggest(suggestion);
-    }
-}
-
 fn suggest_storage_keys<S>(source: &S, builder: &mut SuggestionsBuilder<'_>)
 where
     S: CommandArgumentSource + ?Sized,
@@ -1661,25 +1685,6 @@ where
         .filter_map(|key| key.parse::<Identifier>().ok())
         .collect::<Vec<_>>();
     suggest_resources(keys.iter(), builder);
-}
-
-pub(super) fn matches_substring(pattern: &str, input: &str) -> bool {
-    if input.starts_with(pattern) {
-        return true;
-    }
-    input.char_indices().any(|(index, character)| {
-        matches!(character, '.' | '_' | '/')
-            && input[index + character.len_utf8()..].starts_with(pattern)
-    })
-}
-
-pub(super) fn identifier_matches(pattern: &str, identifier: &Identifier) -> bool {
-    if pattern.contains(':') {
-        matches_substring(pattern, &identifier.to_string())
-    } else {
-        matches_substring(pattern, identifier.namespace.as_ref())
-            || matches_substring(pattern, identifier.path.as_ref())
-    }
 }
 
 fn parse_time(reader: &mut StringReader<'_>, minimum: i32) -> Result<i32, CommandSyntaxError> {
