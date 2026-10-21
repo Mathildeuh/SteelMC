@@ -18,8 +18,8 @@ use super::{
         EntitySelector, is_selector_type_letter, parse_entity_selector, suggest_entity_selector,
     },
     structure::{parse_structure_or_tag_key, suggest_structures},
-    text::{CommandTextResolutionSource, CommandTextResolver, validate_component_syntax},
     suggestions::suggest_resources,
+    text::{CommandTextResolutionSource, CommandTextResolver, validate_component_syntax},
     world::{parse_world_argument, suggest_worlds},
 };
 use crate::chunk::heightmap::HeightmapType;

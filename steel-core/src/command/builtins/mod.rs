@@ -1,7 +1,7 @@
 //! Steel-owned built-in command declarations.
 
-mod ban;
 pub mod advancement;
+mod ban;
 mod clear;
 mod damage;
 mod defaultgamemode;
