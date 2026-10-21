@@ -241,6 +241,8 @@ pub async fn test_server_with_worlds_and_config(
         damage_history,
         config,
         permission_groups,
+        ban_list: BanListManager::transient(),
+        whitelist: WhitelistManager::transient(),
         cancel_token: CancellationToken::new(),
         key_store: KeyStore::create(),
         registry_cache,

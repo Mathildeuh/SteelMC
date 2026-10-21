@@ -1434,6 +1434,8 @@ mod tests {
             .write(&mut payload)
             .expect("last-seen offset should write");
         payload.extend_from_slice(&[0u8; 3]);
+        0u8.write(&mut payload)
+            .expect("last-seen checksum should write");
 
         let decoded = decode(RawPacket::new(play::S_CHAT_COMMAND_SIGNED, payload));
 
