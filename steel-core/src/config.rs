@@ -8,6 +8,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Deserializer, de::Error as DeError};
 use std::{
     collections::BTreeMap,
+    io,
     path::{Component, Path, PathBuf},
 };
 pub use steel_protocol::packet_traits::CompressionInfo;
@@ -17,6 +18,7 @@ use steel_utils::Identifier;
 use steel_utils::codec::Or;
 use steel_utils::types::{Difficulty, GameType};
 use text_components::TextComponent;
+use tokio::fs;
 use toml::map::Map;
 
 use crate::chunk_saver::registry::WorldStorageRegistry;
@@ -843,6 +845,21 @@ fn parse_difficulty(value: &str) -> Result<Difficulty, String> {
     }
 }
 
+/// Writes `contents` to `path` through a sibling `.toml.tmp` file so readers
+/// never see a half-written config.
+pub(crate) async fn write_atomic_toml(path: &Path, contents: String) -> io::Result<()> {
+    let Some(parent) = path.parent() else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "config path has no parent",
+        ));
+    };
+    fs::create_dir_all(parent).await?;
+    let temp_path = path.with_extension("toml.tmp");
+    fs::write(&temp_path, contents).await?;
+    fs::rename(temp_path, path).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1316,22 +1333,4 @@ default = true
             Ok(())
         );
     }
-}
-
-/// Writes `contents` to `path` through a sibling `.toml.tmp` file so readers
-/// never see a half-written config.
-pub(crate) async fn write_atomic_toml(
-    path: &std::path::Path,
-    contents: String,
-) -> std::io::Result<()> {
-    let Some(parent) = path.parent() else {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "config path has no parent",
-        ));
-    };
-    tokio::fs::create_dir_all(parent).await?;
-    let temp_path = path.with_extension("toml.tmp");
-    tokio::fs::write(&temp_path, contents).await?;
-    tokio::fs::rename(temp_path, path).await
 }

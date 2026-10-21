@@ -13,7 +13,6 @@ use steel_utils::{
     translations,
 };
 use text_components::{Modifier as _, TextComponent};
-use tokio::fs;
 use uuid::Uuid;
 
 use crate::config::write_atomic_toml;
@@ -266,15 +265,15 @@ impl From<BanListStoreError> for BanListManagerError {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{
+        env,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
-    use steel_utils::locks::SyncMutex;
+    use tokio::fs;
     use uuid::Uuid;
 
-    use super::{
-        BanEntry, BanListConfig, BanListManager, BanListStore, BanListStoreError, TextComponent,
-        Utc,
-    };
+    use super::{BanEntry, BanListConfig, BanListFileStore, BanListManager, TextComponent, Utc};
 
     fn temp_store(name: &str) -> BanListFileStore {
         let unique = SystemTime::now()
