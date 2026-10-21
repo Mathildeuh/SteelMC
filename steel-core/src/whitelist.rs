@@ -3,11 +3,15 @@
 //! Mirrors vanilla's `UserWhiteList` plus the server's `use-whitelist` toggle,
 //! both stored together in Steel's own `whitelist.toml`.
 
-use std::{error::Error, fmt, sync::Arc};
+use std::{
+    error::Error,
+    fmt, io,
+    path::{Path, PathBuf},
+};
 
-use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use steel_utils::locks::{AsyncMutex, SyncRwLock};
+use tokio::fs;
 use uuid::Uuid;
 
 /// A single whitelist entry.
@@ -32,15 +36,69 @@ pub struct WhitelistConfig {
     pub entries: Vec<WhitelistEntry>,
 }
 
-/// Persists the whitelist configuration owned outside `steel-core`.
-pub trait WhitelistStore: Send + Sync {
-    /// Saves the complete whitelist configuration.
-    fn save(&self, config: WhitelistConfig) -> BoxFuture<'static, Result<(), WhitelistStoreError>>;
+/// TOML-backed whitelist store.
+#[derive(Clone, Debug)]
+pub struct WhitelistFileStore {
+    path: PathBuf,
+}
 
-    /// Reloads the whitelist configuration from its backing storage, picking
-    /// up out-of-band edits (e.g. hand-editing `whitelist.toml` while the
-    /// server is running).
-    fn load(&self) -> BoxFuture<'static, Result<WhitelistConfig, WhitelistStoreError>>;
+impl WhitelistFileStore {
+    /// Creates a file-backed whitelist store.
+    #[must_use]
+    pub const fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    /// Saves the complete whitelist configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when serializing or writing the file fails.
+    pub async fn save(&self, config: &WhitelistConfig) -> Result<(), WhitelistStoreError> {
+        let serialized = toml::to_string_pretty(config).map_err(|error| {
+            WhitelistStoreError::new(format!("failed to serialize whitelist: {error}"))
+        })?;
+        write_atomic(&self.path, serialized).await.map_err(|error| {
+            WhitelistStoreError::new(format!(
+                "failed to write whitelist {}: {error}",
+                self.path.display()
+            ))
+        })
+    }
+
+    /// Reloads the whitelist configuration from disk, picking up out-of-band
+    /// edits (e.g. hand-editing `whitelist.toml` while the server is running).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when reading or parsing the file fails.
+    pub async fn load(&self) -> Result<WhitelistConfig, WhitelistStoreError> {
+        let contents = fs::read_to_string(&self.path).await.map_err(|error| {
+            WhitelistStoreError::new(format!(
+                "failed to read whitelist {}: {error}",
+                self.path.display()
+            ))
+        })?;
+        toml::from_str(&contents).map_err(|error| {
+            WhitelistStoreError::new(format!(
+                "failed to parse whitelist {}: {error}",
+                self.path.display()
+            ))
+        })
+    }
+}
+
+async fn write_atomic(path: &Path, contents: String) -> io::Result<()> {
+    let Some(parent) = path.parent() else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "config path has no parent",
+        ));
+    };
+    fs::create_dir_all(parent).await?;
+    let temp_path = path.with_extension("toml.tmp");
+    fs::write(&temp_path, contents).await?;
+    fs::rename(temp_path, path).await
 }
 
 /// Whitelist persistence failure.
@@ -71,7 +129,7 @@ impl Error for WhitelistStoreError {}
 pub struct WhitelistManager {
     updates: AsyncMutex<()>,
     state: SyncRwLock<WhitelistConfig>,
-    store: Option<Arc<dyn WhitelistStore>>,
+    store: Option<WhitelistFileStore>,
 }
 
 impl fmt::Debug for WhitelistManager {
@@ -80,7 +138,7 @@ impl fmt::Debug for WhitelistManager {
             .debug_struct("WhitelistManager")
             .field("updates", &self.updates)
             .field("state", &self.state)
-            .field("store", &self.store.as_ref().map(|_| "<whitelist store>"))
+            .field("store", &self.store)
             .finish()
     }
 }
@@ -88,7 +146,7 @@ impl fmt::Debug for WhitelistManager {
 impl WhitelistManager {
     /// Builds a manager from an initial config and an optional persistence store.
     #[must_use]
-    pub fn new(config: WhitelistConfig, store: Option<Arc<dyn WhitelistStore>>) -> Self {
+    pub fn new(config: WhitelistConfig, store: Option<WhitelistFileStore>) -> Self {
         Self {
             updates: AsyncMutex::new(()),
             state: SyncRwLock::new(config),
@@ -198,7 +256,7 @@ impl WhitelistManager {
 
     async fn persist_locked(&self, config: WhitelistConfig) -> Result<(), WhitelistManagerError> {
         if let Some(store) = &self.store {
-            store.save(config.clone()).await?;
+            store.save(&config).await?;
         }
         *self.state.write() = config;
         Ok(())
@@ -225,52 +283,23 @@ impl From<WhitelistStoreError> for WhitelistManagerError {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use futures::future::BoxFuture;
-    use steel_utils::locks::SyncMutex;
-
-    use super::{
-        WhitelistConfig, WhitelistEntry, WhitelistManager, WhitelistStore, WhitelistStoreError,
+    use std::{
+        env,
+        time::{SystemTime, UNIX_EPOCH},
     };
 
-    #[derive(Debug)]
-    struct CapturingStore {
-        saved: Arc<SyncMutex<Vec<WhitelistConfig>>>,
-    }
+    use tokio::fs;
 
-    impl WhitelistStore for CapturingStore {
-        fn save(
-            &self,
-            config: WhitelistConfig,
-        ) -> BoxFuture<'static, Result<(), WhitelistStoreError>> {
-            let saved = Arc::clone(&self.saved);
-            Box::pin(async move {
-                saved.lock().push(config);
-                Ok(())
-            })
-        }
+    use super::{WhitelistConfig, WhitelistEntry, WhitelistFileStore, WhitelistManager};
 
-        fn load(&self) -> BoxFuture<'static, Result<WhitelistConfig, WhitelistStoreError>> {
-            let saved = Arc::clone(&self.saved);
-            Box::pin(async move { Ok(saved.lock().last().cloned().unwrap_or_default()) })
-        }
-    }
-
-    #[derive(Debug)]
-    struct FailingStore;
-
-    impl WhitelistStore for FailingStore {
-        fn save(
-            &self,
-            _config: WhitelistConfig,
-        ) -> BoxFuture<'static, Result<(), WhitelistStoreError>> {
-            Box::pin(async { Err(WhitelistStoreError::new("test store failure")) })
-        }
-
-        fn load(&self) -> BoxFuture<'static, Result<WhitelistConfig, WhitelistStoreError>> {
-            Box::pin(async { Err(WhitelistStoreError::new("test store failure")) })
-        }
+    fn temp_store(name: &str) -> WhitelistFileStore {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after the epoch")
+            .as_nanos();
+        WhitelistFileStore::new(
+            env::temp_dir().join(format!("steel-whitelist-{name}-{unique}/whitelist.toml")),
+        )
     }
 
     fn entry(uuid: uuid::Uuid, name: &str) -> WhitelistEntry {
@@ -326,13 +355,8 @@ mod tests {
 
     #[tokio::test]
     async fn reload_replaces_in_memory_state_from_the_store() {
-        let saved = Arc::new(SyncMutex::new(Vec::new()));
-        let manager = WhitelistManager::new(
-            WhitelistConfig::default(),
-            Some(Arc::new(CapturingStore {
-                saved: Arc::clone(&saved),
-            })),
-        );
+        let store = temp_store("reload");
+        let manager = WhitelistManager::new(WhitelistConfig::default(), Some(store.clone()));
         let uuid = uuid::Uuid::nil();
         manager
             .add(entry(uuid, "Steve"))
@@ -340,10 +364,13 @@ mod tests {
             .expect("add should succeed");
 
         // Simulate an out-of-band edit landing in the backing store.
-        saved.lock().push(WhitelistConfig {
-            enabled: true,
-            entries: Vec::new(),
-        });
+        store
+            .save(&WhitelistConfig {
+                enabled: true,
+                entries: Vec::new(),
+            })
+            .await
+            .expect("save should succeed");
 
         manager.reload().await.expect("reload should succeed");
         assert!(manager.is_enabled());
@@ -352,16 +379,22 @@ mod tests {
 
     #[tokio::test]
     async fn add_persists_before_applying_and_surfaces_store_errors() {
-        let failing =
-            WhitelistManager::new(WhitelistConfig::default(), Some(Arc::new(FailingStore)));
+        // A directory at the target path makes the atomic rename fail.
+        let store = temp_store("failing");
+        fs::create_dir_all(&store.path)
+            .await
+            .expect("target directory should be created");
+        let failing = WhitelistManager::new(WhitelistConfig::default(), Some(store));
         let uuid = uuid::Uuid::nil();
         let error = failing
             .add(entry(uuid, "Steve"))
             .await
             .expect_err("store failure should surface");
-        assert_eq!(
-            error.to_string(),
-            "failed to store whitelist: test store failure"
+        assert!(
+            error
+                .to_string()
+                .starts_with("failed to store whitelist: failed to write whitelist"),
+            "unexpected error: {error}"
         );
         assert!(!failing.is_whitelisted(uuid));
     }

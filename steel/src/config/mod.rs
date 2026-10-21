@@ -14,7 +14,6 @@ pub use ban_list::FileBanListStore;
 pub use groups::FilePermissionGroupStore;
 pub use logging::{LogConfig, LogLevel, LogTimeFormat, RotationTimeFormat};
 pub use server::{ServerConfig, ThreadConfig};
-pub use whitelist::FileWhitelistStore;
 
 use std::{
     collections::BTreeMap,
@@ -28,7 +27,7 @@ use steel_core::{
     ban::{BanListConfig, BanListStore},
     config::WorldsConfig,
     permission::{PermissionGroupStore, PermissionGroupsConfig},
-    whitelist::{WhitelistConfig, WhitelistStore},
+    whitelist::{WhitelistConfig, WhitelistFileStore},
 };
 
 use self::{
@@ -92,10 +91,10 @@ impl SteelConfig {
 
     /// Builds the store used for persistence-first whitelist updates.
     #[must_use]
-    pub fn whitelist_store(&self) -> Option<Arc<dyn WhitelistStore>> {
+    pub fn whitelist_store(&self) -> Option<WhitelistFileStore> {
         self.whitelist_path
             .as_ref()
-            .map(|path| Arc::new(FileWhitelistStore::new(path.clone())) as Arc<dyn WhitelistStore>)
+            .map(|path| WhitelistFileStore::new(path.clone()))
     }
 }
 

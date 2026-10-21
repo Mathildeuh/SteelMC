@@ -14,9 +14,7 @@ use super::{
     permission::{PermissionGroupParser, PermissionMetadataParser, PermissionRuleParser},
     profile::{GameProfileParser, GameProfileSuggestionMode},
     score::{parse_int_range, parse_score_holder, suggest_score_holders},
-    selector::{
-        EntitySelector, is_selector_type_letter, parse_entity_selector, suggest_entity_selector,
-    },
+    selector::{EntitySelector, SelectorType, parse_entity_selector, suggest_entity_selector},
     structure::{parse_structure_or_tag_key, suggest_structures},
     suggestions::suggest_resources,
     text::{CommandTextResolutionSource, CommandTextResolver, validate_component_syntax},
@@ -1221,7 +1219,7 @@ fn parse_message(
         let before_at = reader.checkpoint();
         let start = reader.byte_cursor();
         reader.skip();
-        if !reader.peek().is_some_and(is_selector_type_letter) {
+        if reader.peek().and_then(SelectorType::from_letter).is_none() {
             continue;
         }
 

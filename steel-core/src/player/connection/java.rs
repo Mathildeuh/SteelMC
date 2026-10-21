@@ -748,12 +748,6 @@ impl JavaConnection {
                 SChatCommand::read_packet(data)?,
             )),
             play::S_CHAT_COMMAND_SIGNED => {
-                // Sent instead of S_CHAT_COMMAND whenever the client considers one of the
-                // command's arguments signable (e.g. a message-shaped argument), so it can
-                // prove that argument's content to other clients via chat reporting. Steel
-                // doesn't implement chat reporting, so the argument signatures and the
-                // last-seen acknowledgment window aren't consumed here - only the command
-                // text itself, same as the unsigned path.
                 let signed = SChatCommandSigned::read_packet(data)?;
                 scheduled(ScheduledPlayPacketKind::ChatCommand(SChatCommand {
                     command: signed.command,
