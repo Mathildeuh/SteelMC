@@ -10,7 +10,6 @@ mod logging;
 mod server;
 mod whitelist;
 
-pub use ban_list::FileBanListStore;
 pub use groups::FilePermissionGroupStore;
 pub use logging::{LogConfig, LogLevel, LogTimeFormat, RotationTimeFormat};
 pub use server::{ServerConfig, ThreadConfig};
@@ -24,7 +23,7 @@ use std::{
 
 use serde::Deserialize;
 use steel_core::{
-    ban::{BanListConfig, BanListStore},
+    ban::{BanListConfig, BanListFileStore},
     config::WorldsConfig,
     permission::{PermissionGroupStore, PermissionGroupsConfig},
     whitelist::{WhitelistConfig, WhitelistFileStore},
@@ -83,10 +82,10 @@ impl SteelConfig {
 
     /// Builds the store used for persistence-first ban list updates.
     #[must_use]
-    pub fn ban_list_store(&self) -> Option<Arc<dyn BanListStore>> {
+    pub fn ban_list_store(&self) -> Option<BanListFileStore> {
         self.ban_list_path
             .as_ref()
-            .map(|path| Arc::new(FileBanListStore::new(path.clone())) as Arc<dyn BanListStore>)
+            .map(|path| BanListFileStore::new(path.clone()))
     }
 
     /// Builds the store used for persistence-first whitelist updates.

@@ -1317,3 +1317,21 @@ default = true
         );
     }
 }
+
+/// Writes `contents` to `path` through a sibling `.toml.tmp` file so readers
+/// never see a half-written config.
+pub(crate) async fn write_atomic_toml(
+    path: &std::path::Path,
+    contents: String,
+) -> std::io::Result<()> {
+    let Some(parent) = path.parent() else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "config path has no parent",
+        ));
+    };
+    tokio::fs::create_dir_all(parent).await?;
+    let temp_path = path.with_extension("toml.tmp");
+    tokio::fs::write(&temp_path, contents).await?;
+    tokio::fs::rename(temp_path, path).await
+}

@@ -3,16 +3,14 @@
 //! Mirrors vanilla's `UserWhiteList` plus the server's `use-whitelist` toggle,
 //! both stored together in Steel's own `whitelist.toml`.
 
-use std::{
-    error::Error,
-    fmt, io,
-    path::{Path, PathBuf},
-};
+use std::{error::Error, fmt, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 use steel_utils::locks::{AsyncMutex, SyncRwLock};
 use tokio::fs;
 use uuid::Uuid;
+
+use crate::config::write_atomic_toml;
 
 /// A single whitelist entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,12 +56,14 @@ impl WhitelistFileStore {
         let serialized = toml::to_string_pretty(config).map_err(|error| {
             WhitelistStoreError::new(format!("failed to serialize whitelist: {error}"))
         })?;
-        write_atomic(&self.path, serialized).await.map_err(|error| {
-            WhitelistStoreError::new(format!(
-                "failed to write whitelist {}: {error}",
-                self.path.display()
-            ))
-        })
+        write_atomic_toml(&self.path, serialized)
+            .await
+            .map_err(|error| {
+                WhitelistStoreError::new(format!(
+                    "failed to write whitelist {}: {error}",
+                    self.path.display()
+                ))
+            })
     }
 
     /// Reloads the whitelist configuration from disk, picking up out-of-band
@@ -86,19 +86,6 @@ impl WhitelistFileStore {
             ))
         })
     }
-}
-
-async fn write_atomic(path: &Path, contents: String) -> io::Result<()> {
-    let Some(parent) = path.parent() else {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "config path has no parent",
-        ));
-    };
-    fs::create_dir_all(parent).await?;
-    let temp_path = path.with_extension("toml.tmp");
-    fs::write(&temp_path, contents).await?;
-    fs::rename(temp_path, path).await
 }
 
 /// Whitelist persistence failure.

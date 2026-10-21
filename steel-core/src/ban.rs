@@ -4,17 +4,19 @@
 //! `banned-players.toml` for consistency with the rest of Steel's
 //! TOML-backed configuration rather than vanilla's `banned-players.json`.
 
-use std::{error::Error, fmt, sync::Arc};
+use std::{error::Error, fmt, path::PathBuf};
 
 use chrono::{DateTime, Utc};
-use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use steel_utils::{
     locks::{AsyncMutex, SyncRwLock},
     translations,
 };
 use text_components::{Modifier as _, TextComponent};
+use tokio::fs;
 use uuid::Uuid;
+
+use crate::config::write_atomic_toml;
 
 /// A single ban entry, keyed by player UUID.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,11 +84,37 @@ pub struct BanListConfig {
     pub bans: Vec<BanEntry>,
 }
 
-/// Persists the ban list configuration owned outside `steel-core`.
-pub trait BanListStore: Send + Sync {
+/// TOML-backed ban list store.
+#[derive(Clone, Debug)]
+pub struct BanListFileStore {
+    path: PathBuf,
+}
+
+impl BanListFileStore {
+    /// Creates a file-backed ban list store.
+    #[must_use]
+    pub const fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
     /// Saves the complete ban list configuration.
-    fn save_bans(&self, config: BanListConfig)
-    -> BoxFuture<'static, Result<(), BanListStoreError>>;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when serializing or writing the file fails.
+    pub async fn save_bans(&self, config: &BanListConfig) -> Result<(), BanListStoreError> {
+        let serialized = toml::to_string_pretty(config).map_err(|error| {
+            BanListStoreError::new(format!("failed to serialize ban list: {error}"))
+        })?;
+        write_atomic_toml(&self.path, serialized)
+            .await
+            .map_err(|error| {
+                BanListStoreError::new(format!(
+                    "failed to write ban list {}: {error}",
+                    self.path.display()
+                ))
+            })
+    }
 }
 
 /// Ban list persistence failure.
@@ -117,7 +145,7 @@ impl Error for BanListStoreError {}
 pub struct BanListManager {
     updates: AsyncMutex<()>,
     state: SyncRwLock<BanListConfig>,
-    store: Option<Arc<dyn BanListStore>>,
+    store: Option<BanListFileStore>,
 }
 
 impl fmt::Debug for BanListManager {
@@ -126,7 +154,7 @@ impl fmt::Debug for BanListManager {
             .debug_struct("BanListManager")
             .field("updates", &self.updates)
             .field("state", &self.state)
-            .field("store", &self.store.as_ref().map(|_| "<ban list store>"))
+            .field("store", &self.store)
             .finish()
     }
 }
@@ -134,7 +162,7 @@ impl fmt::Debug for BanListManager {
 impl BanListManager {
     /// Builds a manager from an initial config and an optional persistence store.
     #[must_use]
-    pub fn new(config: BanListConfig, store: Option<Arc<dyn BanListStore>>) -> Self {
+    pub fn new(config: BanListConfig, store: Option<BanListFileStore>) -> Self {
         Self {
             updates: AsyncMutex::new(()),
             state: SyncRwLock::new(config),
@@ -211,7 +239,7 @@ impl BanListManager {
 
     async fn persist_locked(&self, config: BanListConfig) -> Result<(), BanListManagerError> {
         if let Some(store) = &self.store {
-            store.save_bans(config.clone()).await?;
+            store.save_bans(&config).await?;
         }
         *self.state.write() = config;
         Ok(())
@@ -240,7 +268,6 @@ impl From<BanListStoreError> for BanListManagerError {
 mod tests {
     use std::sync::Arc;
 
-    use futures::future::BoxFuture;
     use steel_utils::locks::SyncMutex;
     use uuid::Uuid;
 
@@ -249,34 +276,14 @@ mod tests {
         Utc,
     };
 
-    #[derive(Debug)]
-    struct CapturingStore {
-        saved: Arc<SyncMutex<Vec<BanListConfig>>>,
-    }
-
-    impl BanListStore for CapturingStore {
-        fn save_bans(
-            &self,
-            config: BanListConfig,
-        ) -> BoxFuture<'static, Result<(), BanListStoreError>> {
-            let saved = Arc::clone(&self.saved);
-            Box::pin(async move {
-                saved.lock().push(config);
-                Ok(())
-            })
-        }
-    }
-
-    #[derive(Debug)]
-    struct FailingStore;
-
-    impl BanListStore for FailingStore {
-        fn save_bans(
-            &self,
-            _config: BanListConfig,
-        ) -> BoxFuture<'static, Result<(), BanListStoreError>> {
-            Box::pin(async { Err(BanListStoreError::new("test store failure")) })
-        }
+    fn temp_store(name: &str) -> BanListFileStore {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after the epoch")
+            .as_nanos();
+        BanListFileStore::new(env::temp_dir().join(format!(
+            "steel-ban-list-{name}-{unique}/banned-players.toml"
+        )))
     }
 
     fn entry(uuid: Uuid, reason: &str) -> BanEntry {
@@ -339,29 +346,35 @@ mod tests {
 
     #[tokio::test]
     async fn add_persists_before_applying_and_surfaces_store_errors() {
-        let saved = Arc::new(SyncMutex::new(Vec::new()));
-        let manager = BanListManager::new(
-            BanListConfig::default(),
-            Some(Arc::new(CapturingStore {
-                saved: Arc::clone(&saved),
-            })),
-        );
+        let store = temp_store("persist");
+        let manager = BanListManager::new(BanListConfig::default(), Some(store.clone()));
         let uuid = Uuid::nil();
         manager
             .add(entry(uuid, "reason"))
             .await
             .expect("add should succeed");
-        assert_eq!(saved.lock().len(), 1);
+        let saved = fs::read_to_string(&store.path)
+            .await
+            .expect("ban list should be written");
+        let saved: BanListConfig = toml::from_str(&saved).expect("saved ban list should parse");
+        assert_eq!(saved.bans.len(), 1);
         assert!(manager.is_banned(uuid));
 
-        let failing = BanListManager::new(BanListConfig::default(), Some(Arc::new(FailingStore)));
+        // A directory at the target path makes the atomic rename fail.
+        let failing_store = temp_store("failing");
+        fs::create_dir_all(&failing_store.path)
+            .await
+            .expect("target directory should be created");
+        let failing = BanListManager::new(BanListConfig::default(), Some(failing_store));
         let error = failing
             .add(entry(uuid, "reason"))
             .await
             .expect_err("store failure should surface");
-        assert_eq!(
-            error.to_string(),
-            "failed to store ban list: test store failure"
+        assert!(
+            error
+                .to_string()
+                .starts_with("failed to store ban list: failed to write ban list"),
+            "unexpected error: {error}"
         );
         assert!(!failing.is_banned(uuid));
     }
